@@ -49,6 +49,9 @@ public class SecurityConfig {
     @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}")
     private String issuerUri;
 
+    @Value("${valeerp.cors.allowed-origin-patterns}")
+    private String allowedOriginPatterns;
+
     /**
      * Solo login/registro/upsert públicos.
      * El resto de /api/auth/** (ACL, users, sessions) pasa por la cadena protegida + JWT
@@ -157,7 +160,10 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(Arrays.asList("http://localhost:8081"));
+        configuration.setAllowedOriginPatterns(Arrays.stream(allowedOriginPatterns.split(","))
+                .map(String::trim)
+                .filter(pattern -> !pattern.isEmpty())
+                .toList());
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
         configuration.setAllowCredentials(true);
