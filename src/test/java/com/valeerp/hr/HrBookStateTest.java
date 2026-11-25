@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -72,20 +73,48 @@ class HrBookStateTest {
 
     @Test
     void employeeIsDistinctFromIdentityUserLink() {
-        Employee employee = Employee.hire(
+        Employee employee = Employee.register(
                 1L,
-                "E-001",
-                "Ana Pérez",
-                2L,
-                3L,
-                LocalDate.parse("2025-03-01"),
-                null,
-                "ana@empresa.local"
+                IdentityDocument.parse(IdentityDocumentType.DNI, "45678912"),
+                "Pérez",
+                "Ana",
+                LocalDate.parse("1990-05-10"),
+                Sex.FEMALE,
+                0,
+                "ana.personal@correo.pe",
+                "ana@empresa.pe",
+                "ABC123456789",
+                HomeAddress.of("Av. Lima 123", "Miraflores", "Lima"),
+                List.of(EmployeePhone.of(PhoneUse.PERSONAL, "999888777")),
+                LocalDate.parse("2026-11-25")
         );
         assertEquals(null, employee.getUserId());
+        assertEquals(36, employee.ageAt(LocalDate.parse("2026-11-25")));
+        assertEquals("45678912", employee.getDocumentNumber());
         employee.linkUser(99L);
         assertEquals(99L, employee.getUserId());
         employee.unlinkUser();
         assertEquals(null, employee.getUserId());
+    }
+
+    @Test
+    void employeeRejectsFutureBirthAndInvalidDocument() {
+        assertThrows(DomainException.class, () -> Employee.register(
+                1L,
+                IdentityDocument.parse(IdentityDocumentType.DNI, "45678912"),
+                "Pérez",
+                "Ana",
+                LocalDate.parse("2027-01-01"),
+                Sex.FEMALE,
+                0,
+                null,
+                null,
+                null,
+                HomeAddress.of("Av. Lima 123", null, null),
+                List.of(),
+                LocalDate.parse("2026-11-25")
+        ));
+        assertThrows(DomainException.class, () -> IdentityDocument.parse(IdentityDocumentType.DNI, "123"));
+        assertThrows(DomainException.class, () -> Cuspp.normalize("CORTO"));
     }
 }

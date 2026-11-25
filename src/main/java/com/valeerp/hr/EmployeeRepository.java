@@ -7,13 +7,15 @@ import java.util.Optional;
 
 public interface EmployeeRepository extends JpaRepository<Employee, Long> {
 
-    List<Employee> findByCompanyId(Long companyId);
+    List<Employee> findByLegalEntityId(Long legalEntityId);
 
-    List<Employee> findByDepartmentId(Long departmentId);
+    Optional<Employee> findByLegalEntityIdAndDocumentTypeAndDocumentNumber(
+            Long legalEntityId,
+            IdentityDocumentType documentType,
+            String documentNumber
+    );
 
-    Optional<Employee> findByCompanyIdAndCodeIgnoreCase(Long companyId, String code);
-
-    boolean existsByCompanyIdAndCodeIgnoreCase(Long companyId, String code);
+    Optional<Employee> findByLegalEntityIdAndCuspp(Long legalEntityId, String cuspp);
 
     boolean existsByUserId(Long userId);
 }

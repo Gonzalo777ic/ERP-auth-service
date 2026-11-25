@@ -1,101 +1,107 @@
 package com.valeerp.hr;
 
-import com.valeerp.inventory.auth.repository.UserRepository;
 import com.valeerp.hr.dto.CreateEmployeeRequest;
+import com.valeerp.hr.dto.EmployeeAddressRequest;
+import com.valeerp.hr.dto.EmployeePhoneRequest;
 import com.valeerp.hr.dto.EmployeeResponse;
 import com.valeerp.hr.dto.LinkEmployeeUserRequest;
 import com.valeerp.hr.dto.UpdateEmployeeRequest;
+import com.valeerp.inventory.auth.repository.UserRepository;
 import com.valeerp.kernel.Actors;
 import com.valeerp.kernel.DomainException;
-import com.valeerp.kernel.company.CompanyRepository;
+import com.valeerp.kernel.company.CompanyProperties;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
- * Caso de uso de ficha RRHH. No posee ficha comercial; User solo por id opcional.
+ * Caso de uso de la ficha del trabajador. La entidad legal entra solo como id.
+ * La edad se calcula con la zona horaria de {@code valeerp.company.default-time-zone}.
  */
 @Service
 public class EmployeeService {
 
     private final EmployeeRepository employeeRepository;
-    private final DepartmentRepository departmentRepository;
-    private final PositionRepository positionRepository;
-    private final CompanyRepository companyRepository;
     private final UserRepository userRepository;
+    private final CompanyProperties companyProperties;
 
     public EmployeeService(
             EmployeeRepository employeeRepository,
-            DepartmentRepository departmentRepository,
-            PositionRepository positionRepository,
-            CompanyRepository companyRepository,
-            UserRepository userRepository
+            UserRepository userRepository,
+            CompanyProperties companyProperties
     ) {
         this.employeeRepository = employeeRepository;
-        this.departmentRepository = departmentRepository;
-        this.positionRepository = positionRepository;
-        this.companyRepository = companyRepository;
         this.userRepository = userRepository;
+        this.companyProperties = companyProperties;
     }
 
     @Transactional(readOnly = true)
-    public List<EmployeeResponse> listByCompany(Long companyId) {
-        requireCompany(companyId);
-        return employeeRepository.findByCompanyId(companyId).stream().map(EmployeeResponse::from).toList();
+    public List<EmployeeResponse> listByLegalEntity(Long legalEntityId) {
+        requireLegalEntity(legalEntityId);
+        LocalDate today = today();
+        return employeeRepository.findByLegalEntityId(legalEntityId).stream()
+                .map(employee -> EmployeeResponse.from(employee, today))
+                .toList();
     }
 
     @Transactional(readOnly = true)
     public EmployeeResponse get(Long id) {
-        return EmployeeResponse.from(requireEmployee(id));
+        Employee employee = requireEmployee(id);
+        return EmployeeResponse.from(employee, today());
     }
 
     @Transactional
     public EmployeeResponse create(CreateEmployeeRequest request) {
-        requireCompany(request.getCompanyId());
-        Department department = requireDepartmentInCompany(request.getDepartmentId(), request.getCompanyId());
-        Position position = requirePositionInCompany(request.getPositionId(), request.getCompanyId());
-        String code = request.getCode().trim();
-        if (employeeRepository.existsByCompanyIdAndCodeIgnoreCase(request.getCompanyId(), code)) {
-            throw new DomainException("Ya existe un empleado activo con ese código");
-        }
-        Long userId = request.getUserId();
-        if (userId != null) {
-            requireIdentityUser(userId);
-            if (employeeRepository.existsByUserId(userId)) {
-                throw new DomainException("El usuario de identidad ya está vinculado a un empleado");
-            }
-        }
-        Employee employee = Employee.hire(
-                request.getCompanyId(),
-                code,
-                request.getFullName(),
-                department.getId(),
-                position.getId(),
-                request.getHireDate(),
-                userId,
-                request.getWorkEmail()
+        requireLegalEntity(request.getLegalEntityId());
+        IdentityDocument document = IdentityDocument.parse(request.getDocumentType(), request.getDocumentNumber());
+        ensureDocumentAvailable(request.getLegalEntityId(), document, null);
+        String cuspp = Cuspp.normalize(request.getCuspp());
+        ensureCusppAvailable(request.getLegalEntityId(), cuspp, null);
+        LocalDate today = today();
+        Employee employee = Employee.register(
+                request.getLegalEntityId(),
+                document,
+                request.getSurnames(),
+                request.getGivenNames(),
+                request.getBirthDate(),
+                request.getSex(),
+                request.getChildrenCount() == null ? 0 : request.getChildrenCount(),
+                request.getPersonalEmail(),
+                request.getWorkEmail(),
+                cuspp,
+                addressOf(request.getAddress()),
+                phonesOf(request.getPhones()),
+                today
         );
-        return EmployeeResponse.from(employeeRepository.save(employee));
+        return EmployeeResponse.from(employeeRepository.save(employee), today);
     }
 
     @Transactional
     public EmployeeResponse update(Long id, UpdateEmployeeRequest request) {
         Employee employee = requireEmployee(id);
-        requireDepartmentInCompany(request.getDepartmentId(), employee.getCompanyId());
-        requirePositionInCompany(request.getPositionId(), employee.getCompanyId());
-        String code = request.getCode().trim();
-        employeeRepository.findByCompanyIdAndCodeIgnoreCase(employee.getCompanyId(), code).ifPresent(other -> {
-            if (!other.getId().equals(id)) {
-                throw new DomainException("Ya existe un empleado activo con ese código");
-            }
-        });
-        employee.rename(code, request.getFullName());
-        employee.reassignOrg(request.getDepartmentId(), request.getPositionId());
-        employee.changeHireDate(request.getHireDate());
-        employee.changeWorkEmail(request.getWorkEmail());
-        return EmployeeResponse.from(employeeRepository.save(employee));
+        IdentityDocument document = IdentityDocument.parse(request.getDocumentType(), request.getDocumentNumber());
+        ensureDocumentAvailable(employee.getLegalEntityId(), document, id);
+        String cuspp = Cuspp.normalize(request.getCuspp());
+        ensureCusppAvailable(employee.getLegalEntityId(), cuspp, id);
+        LocalDate today = today();
+        employee.correctProfile(
+                document,
+                request.getSurnames(),
+                request.getGivenNames(),
+                request.getBirthDate(),
+                request.getSex(),
+                request.getChildrenCount() == null ? 0 : request.getChildrenCount(),
+                request.getPersonalEmail(),
+                request.getWorkEmail(),
+                cuspp,
+                addressOf(request.getAddress()),
+                phonesOf(request.getPhones()),
+                today
+        );
+        return EmployeeResponse.from(employeeRepository.save(employee), today);
     }
 
     @Transactional
@@ -107,14 +113,14 @@ public class EmployeeService {
             throw new DomainException("El usuario de identidad ya está vinculado a un empleado");
         }
         employee.linkUser(request.getUserId());
-        return EmployeeResponse.from(employeeRepository.save(employee));
+        return EmployeeResponse.from(employeeRepository.save(employee), today());
     }
 
     @Transactional
     public EmployeeResponse unlinkUser(Long id) {
         Employee employee = requireEmployee(id);
         employee.unlinkUser();
-        return EmployeeResponse.from(employeeRepository.save(employee));
+        return EmployeeResponse.from(employeeRepository.save(employee), today());
     }
 
     @Transactional
@@ -124,12 +130,49 @@ public class EmployeeService {
         employeeRepository.save(employee);
     }
 
-    private void requireCompany(Long companyId) {
-        if (companyId == null) {
-            throw new DomainException("La compañía es obligatoria");
+    private void ensureDocumentAvailable(Long legalEntityId, IdentityDocument document, Long currentId) {
+        employeeRepository
+                .findByLegalEntityIdAndDocumentTypeAndDocumentNumber(legalEntityId, document.type(), document.number())
+                .filter(other -> currentId == null || !currentId.equals(other.getId()))
+                .ifPresent(other -> {
+                    throw new DomainException("Ya existe un empleado vigente con ese documento en la entidad legal");
+                });
+    }
+
+    private void ensureCusppAvailable(Long legalEntityId, String cuspp, Long currentId) {
+        if (cuspp == null) {
+            return;
         }
-        if (!companyRepository.existsById(companyId)) {
-            throw new DomainException("Compañía no encontrada");
+        employeeRepository.findByLegalEntityIdAndCuspp(legalEntityId, cuspp)
+                .filter(other -> currentId == null || !currentId.equals(other.getId()))
+                .ifPresent(other -> {
+                    throw new DomainException("Ya existe un empleado vigente con ese CUSPP en la entidad legal");
+                });
+    }
+
+    private List<EmployeePhone> phonesOf(List<EmployeePhoneRequest> requests) {
+        if (requests == null || requests.isEmpty()) {
+            return List.of();
+        }
+        return requests.stream()
+                .map(request -> EmployeePhone.of(request.getUse(), request.getNumber()))
+                .toList();
+    }
+
+    private HomeAddress addressOf(EmployeeAddressRequest request) {
+        if (request == null) {
+            throw new DomainException("La dirección de domicilio es obligatoria");
+        }
+        return HomeAddress.of(request.getLine(), request.getDistrict(), request.getCity());
+    }
+
+    private LocalDate today() {
+        return LocalDate.now(companyProperties.getDefaultTimeZone().toZoneId());
+    }
+
+    private void requireLegalEntity(Long legalEntityId) {
+        if (legalEntityId == null) {
+            throw new DomainException("La entidad legal es obligatoria");
         }
     }
 
@@ -140,24 +183,6 @@ public class EmployeeService {
         if (!userRepository.existsById(userId)) {
             throw new DomainException("Usuario de identidad no encontrado");
         }
-    }
-
-    private Department requireDepartmentInCompany(Long departmentId, Long companyId) {
-        Department department = departmentRepository.findById(departmentId)
-                .orElseThrow(() -> new DomainException("Departamento no encontrado"));
-        if (!department.getCompanyId().equals(companyId)) {
-            throw new DomainException("El departamento no pertenece a la compañía");
-        }
-        return department;
-    }
-
-    private Position requirePositionInCompany(Long positionId, Long companyId) {
-        Position position = positionRepository.findById(positionId)
-                .orElseThrow(() -> new DomainException("Puesto no encontrado"));
-        if (!position.getCompanyId().equals(companyId)) {
-            throw new DomainException("El puesto no pertenece a la compañía");
-        }
-        return position;
     }
 
     private Employee requireEmployee(Long id) {

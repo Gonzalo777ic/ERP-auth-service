@@ -36,8 +36,8 @@ public class EmployeeController {
 
     @GetMapping
     @PreAuthorize("hasAnyAuthority('ROLE_ADMIN', 'ROLE_AUDITOR')")
-    public ResponseEntity<List<EmployeeResponse>> list(@RequestParam Long companyId) {
-        return ResponseEntity.ok(employeeService.listByCompany(companyId));
+    public ResponseEntity<List<EmployeeResponse>> list(@RequestParam Long legalEntityId) {
+        return ResponseEntity.ok(employeeService.listByLegalEntity(legalEntityId));
     }
 
     @GetMapping("/{id}")
