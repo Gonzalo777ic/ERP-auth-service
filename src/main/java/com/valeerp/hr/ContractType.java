@@ -7,10 +7,20 @@ import com.valeerp.kernel.DomainException;
  */
 public enum ContractType {
 
-    INDEFINITE,
-    FIXED_TERM,
-    INTERNSHIP,
-    SERVICES;
+    INDEFINITE("Plazo indeterminado"),
+    FIXED_TERM("Plazo fijo"),
+    INTERNSHIP("Prácticas"),
+    SERVICES("Prestación de servicios");
+
+    private final String label;
+
+    ContractType(String label) {
+        this.label = label;
+    }
+
+    public String label() {
+        return label;
+    }
 
     public static ContractType require(String raw) {
         if (raw == null || raw.isBlank()) {

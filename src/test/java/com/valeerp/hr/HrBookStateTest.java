@@ -117,4 +117,30 @@ class HrBookStateTest {
         assertThrows(DomainException.class, () -> IdentityDocument.parse(IdentityDocumentType.DNI, "123"));
         assertThrows(DomainException.class, () -> Cuspp.normalize("CORTO"));
     }
+
+    @Test
+    void banksFollowSunatCodesFromTheOpenCatalog() {
+        assertEquals("02", PayrollBank.BCP.sunatCode());
+        assertEquals("03", PayrollBank.INTERBANK.sunatCode());
+        assertEquals("11", PayrollBank.BBVA.sunatCode());
+        assertEquals("18", PayrollBank.NACION.sunatCode());
+    }
+
+    @Test
+    void activeContractCeasesWithoutDeletingTheBook() {
+        EmploymentContract contract = EmploymentContract.draft(
+                10L,
+                1L,
+                ContractType.INDEFINITE,
+                LocalDate.parse("2014-09-08"),
+                null,
+                Money.pen(new BigDecimal("1800.00")),
+                Instant.parse("2014-09-08T15:00:00Z")
+        );
+        contract.activate(Instant.parse("2014-09-08T15:05:00Z"));
+        contract.cease(LocalDate.parse("2026-08-03"), "Renuncia", Instant.parse("2026-08-03T15:00:00Z"));
+        assertEquals(ContractStatus.COMPLETED, contract.getStatus());
+        assertEquals(LocalDate.parse("2026-08-03"), contract.getProfile().getCessationOn());
+        assertThrows(DomainException.class, () -> BankAccount.of(PayrollBank.BBVA, BankAccountType.SAVINGS, "123", "PEN"));
+    }
 }

@@ -14,6 +14,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 
@@ -73,6 +74,9 @@ public class EmploymentContract {
 
     @Column(name = "cancel_reason", length = 255)
     private String cancelReason;
+
+    @Embedded
+    private ContractProfile profile;
 
     protected EmploymentContract() {
     }
@@ -147,6 +151,74 @@ public class EmploymentContract {
         this.completedAt = when;
     }
 
+    public void replaceWage(Money wage) {
+        if (wage == null) {
+            throw new DomainException("La remuneración del contrato es obligatoria");
+        }
+        if (status == ContractStatus.CANCELLED || status == ContractStatus.COMPLETED) {
+            throw new DomainException("No se cambia la remuneración de un contrato " + status);
+        }
+        this.wage = wage;
+    }
+
+    public void extendTo(LocalDate endsOn) {
+        if (status != ContractStatus.ACTIVE && status != ContractStatus.DRAFT) {
+            throw new DomainException("Solo un contrato vigente o en borrador se renueva");
+        }
+        if (endsOn == null || endsOn.isBefore(startsOn)) {
+            throw new DomainException("El vencimiento de la renovación no puede ser anterior al inicio");
+        }
+        this.endsOn = endsOn;
+    }
+
+    public void cease(LocalDate on, String reason, Instant when) {
+        if (status == ContractStatus.CANCELLED) {
+            throw new DomainException("No se cesa un contrato anulado");
+        }
+        if (status == ContractStatus.COMPLETED) {
+            throw new DomainException("El contrato ya está cerrado");
+        }
+        if (on == null || on.isBefore(startsOn)) {
+            throw new DomainException("La fecha de cese no puede ser anterior al inicio");
+        }
+        ensureProfile().cease(on, reason);
+        if (status == ContractStatus.ACTIVE) {
+            complete(when, on);
+        } else {
+            this.endsOn = on;
+        }
+    }
+
+    public void describeProfile(
+            WorkerKind workerKind,
+            String payrollGroup,
+            PensionRegime pensionRegime,
+            LaborRegime laborRegime,
+            boolean allowSalaryAdvance,
+            String notes
+    ) {
+        ensureProfile().describe(workerKind, payrollGroup, pensionRegime, laborRegime, allowSalaryAdvance, notes);
+    }
+
+    public void payWages(WagePaymentMethod method, BankAccount account) {
+        ensureProfile().payWages(method, account);
+    }
+
+    public void payCts(WagePaymentMethod method, BankAccount account) {
+        ensureProfile().payCts(method, account);
+    }
+
+    public void retain(RetentionMode mode, BigDecimal value, String beneficiary) {
+        ensureProfile().retain(mode, value, beneficiary);
+    }
+
+    private ContractProfile ensureProfile() {
+        if (profile == null) {
+            profile = ContractProfile.empty();
+        }
+        return profile;
+    }
+
     public void cancel(String actor, Instant when, String reason) {
         if (status == ContractStatus.COMPLETED || status == ContractStatus.CANCELLED) {
             throw new DomainException("No se puede anular un contrato " + status);
@@ -214,5 +286,9 @@ public class EmploymentContract {
 
     public String getCancelReason() {
         return cancelReason;
+    }
+
+    public ContractProfile getProfile() {
+        return profile;
     }
 }

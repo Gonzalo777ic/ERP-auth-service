@@ -7,10 +7,20 @@ import com.valeerp.kernel.DomainException;
  */
 public enum ContractStatus {
 
-    DRAFT,
-    ACTIVE,
-    COMPLETED,
-    CANCELLED;
+    DRAFT("Borrador"),
+    ACTIVE("Activo"),
+    COMPLETED("Cerrado"),
+    CANCELLED("Anulado");
+
+    private final String label;
+
+    ContractStatus(String label) {
+        this.label = label;
+    }
+
+    public String label() {
+        return label;
+    }
 
     public static ContractStatus require(String raw) {
         if (raw == null || raw.isBlank()) {

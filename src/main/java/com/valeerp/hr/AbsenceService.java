@@ -56,7 +56,7 @@ public class AbsenceService {
         AbsenceType type = resolveAbsenceType(request.getAbsenceType());
         Absence absence = Absence.draft(
                 employee.getId(),
-                employee.getCompanyId(),
+                employee.getLegalEntityId(),
                 type,
                 request.getStartsOn(),
                 request.getEndsOn(),

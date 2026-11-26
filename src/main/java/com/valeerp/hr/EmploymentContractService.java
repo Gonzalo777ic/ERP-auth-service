@@ -2,6 +2,8 @@ package com.valeerp.hr;
 
 import com.valeerp.hr.dto.CancelBookRequest;
 import com.valeerp.hr.dto.CompleteContractRequest;
+import com.valeerp.hr.dto.ContractCommands;
+import com.valeerp.hr.dto.ContractReadModel;
 import com.valeerp.hr.dto.ContractResponse;
 import com.valeerp.hr.dto.CreateContractRequest;
 import com.valeerp.hr.dto.MoneyDto;
@@ -14,6 +16,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Libro de contratos. Sin delete físico: activar / completar / anular por estado.
@@ -24,15 +30,18 @@ public class EmploymentContractService {
     private final EmploymentContractRepository contractRepository;
     private final EmployeeRepository employeeRepository;
     private final HrProperties properties;
+    private final ContractHistoryService historyService;
 
     public EmploymentContractService(
             EmploymentContractRepository contractRepository,
             EmployeeRepository employeeRepository,
-            HrProperties properties
+            HrProperties properties,
+            ContractHistoryService historyService
     ) {
         this.contractRepository = contractRepository;
         this.employeeRepository = employeeRepository;
         this.properties = properties;
+        this.historyService = historyService;
     }
 
     @Transactional(readOnly = true)
@@ -50,6 +59,55 @@ public class EmploymentContractService {
     }
 
     @Transactional(readOnly = true)
+    public List<ContractReadModel.Summary> roster(Long legalEntityId, String document, String name, boolean activeOnly) {
+        if (legalEntityId == null) {
+            throw new DomainException("La entidad legal es obligatoria");
+        }
+        String documentQuery = normalize(document);
+        String nameQuery = normalize(name);
+        Map<Long, Employee> people = employeeRepository.findByLegalEntityId(legalEntityId).stream()
+                .filter(employee -> matches(employee.getDocumentNumber(), documentQuery))
+                .filter(employee -> matches(employee.displayName(), nameQuery))
+                .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        if (people.isEmpty()) {
+            return List.of();
+        }
+        return contractRepository.findByCompanyIdAndEmployeeIdIn(legalEntityId, people.keySet()).stream()
+                .filter(contract -> !activeOnly || contract.getStatus() == ContractStatus.ACTIVE)
+                .map(contract -> ContractReadModel.summary(contract, people.get(contract.getEmployeeId())))
+                .toList();
+    }
+
+    @Transactional
+    public ContractReadModel.Terms updateTerms(Long id, ContractCommands.Terms request) {
+        EmploymentContract contract = requireMutable(id);
+        contract.describeProfile(
+                WorkerKind.require(request.getWorkerKind()),
+                request.getPayrollGroup(),
+                PensionRegime.require(request.getPensionRegime()),
+                LaborRegime.require(request.getLaborRegime()),
+                request.isAllowSalaryAdvance(),
+                request.getNotes()
+        );
+        applyPayment(contract, true, request);
+        applyPayment(contract, false, request);
+        contract.retain(
+                RetentionMode.require(request.getRetentionMode()),
+                request.getRetentionValue(),
+                request.getRetentionBeneficiary()
+        );
+        contractRepository.save(contract);
+        return ContractReadModel.terms(contract);
+    }
+
+    @Transactional
+    public ContractResponse cease(Long id, ContractCommands.Cease request) {
+        EmploymentContract contract = requireMutable(id);
+        contract.cease(request.getOn(), request.getReason(), Instant.now());
+        return ContractResponse.from(contractRepository.save(contract));
+    }
+
+    @Transactional(readOnly = true)
     public ContractResponse get(Long id) {
         return ContractResponse.from(requireContract(id));
     }
@@ -61,14 +119,16 @@ public class EmploymentContractService {
         Money wage = resolveWage(request.getWage());
         EmploymentContract contract = EmploymentContract.draft(
                 employee.getId(),
-                employee.getCompanyId(),
+                employee.getLegalEntityId(),
                 type,
                 request.getStartsOn(),
                 request.getEndsOn(),
                 wage,
                 Instant.now()
         );
-        return ContractResponse.from(contractRepository.save(contract));
+        EmploymentContract saved = contractRepository.save(contract);
+        historyService.recordOpeningWage(saved, wage, Actors.current());
+        return ContractResponse.from(saved);
     }
 
     @Transactional
@@ -108,6 +168,45 @@ public class EmploymentContractService {
                 ? properties.getDefaultWageCurrency()
                 : Currency.of(dto.getCurrency());
         return Money.of(dto.getAmount(), currency);
+    }
+
+    private void applyPayment(EmploymentContract contract, boolean wages, ContractCommands.Terms request) {
+        String methodRaw = wages ? request.getWagePaymentMethod() : request.getCtsPaymentMethod();
+        if (methodRaw == null || methodRaw.isBlank()) {
+            return;
+        }
+        WagePaymentMethod method = WagePaymentMethod.require(methodRaw);
+        BankAccount account = null;
+        if (method == WagePaymentMethod.BANK_ACCOUNT) {
+            String currency = wages ? request.getWageAccountCurrency() : request.getCtsAccountCurrency();
+            account = BankAccount.of(
+                    PayrollBank.require(wages ? request.getWageBank() : request.getCtsBank()),
+                    BankAccountType.require(wages ? request.getWageAccountType() : request.getCtsAccountType()),
+                    wages ? request.getWageAccountNumber() : request.getCtsAccountNumber(),
+                    (currency == null || currency.isBlank()) ? properties.getDefaultWageCurrency().code() : currency
+            );
+        }
+        if (wages) {
+            contract.payWages(method, account);
+        } else {
+            contract.payCts(method, account);
+        }
+    }
+
+    private EmploymentContract requireMutable(Long id) {
+        EmploymentContract contract = requireContract(id);
+        if (contract.getStatus() == ContractStatus.CANCELLED) {
+            throw new DomainException("No se modifica un contrato anulado");
+        }
+        return contract;
+    }
+
+    private static String normalize(String raw) {
+        return raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean matches(String value, String query) {
+        return query.isEmpty() || (value != null && value.toLowerCase(Locale.ROOT).contains(query));
     }
 
     private Employee requireEmployee(Long employeeId) {
